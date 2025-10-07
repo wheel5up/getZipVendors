@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform:
+  - "AWS::LanguageExtensions"
+  - "AWS::Serverless-2016-10-31"
+
+Resources:
+  getZipVendorsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/vendedlogs/states/getZipVendors
+      LogGroupClass: STANDARD
+      Tags:
+        - Key: createdBy
+          Value: jwheeler
+
+  getZipVendorsStepFunction:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: getZipVendorsStepFunction
+      Type: EXPRESS
+      Definition:
+        Comment: Step function to get Zip Vendors
+        StartAt: GetZipVendors
+        States:
+          GetZipVendors:
+            Type: Task
+            Resource: arn:aws:states:::http:invoke
+            Parameters:
+              Method: GET
+              ApiEndpoint: https://api.ziphq.com/vendors
+              InvocationConfig:
+                ConnectionArn: arn:aws:events:us-east-1:263423265049:connection/ZipAPIkey/a3864131-1c2d-4f9a-8ff2-af64ef2defde
+              QueryParameters:
+                status: ACTIVE
+                include_attributes: true
+            Next: IterateOverVendors
+          IterateOverVendors:
+            Type: Map
+            ItemsPath: $.ResponseBody.list
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: checkCategories
+              States:
+                checkCategories:
+                  Type: Choice
+                  Choices:
+                    - Variable: "$.categories"
+                      IsPresent: true
+                      Next: updateConfluence
+                  Default: noCategories
+                noCategories:
+                  Type: Pass
+                  End: true
+                updateConfluence:
+                  Type: Pass
+                  End: true
+            End: true
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt getZipVendorsLogGroup.Arn
+      Tags:
+        createdBy: jwheeler
+      Policies:
+        - Statement:
+            - Sid: InvokeHTTPEndpoint
+              Effect: Allow
+              Action:
+                - states:InvokeHTTPEndpoint
+              Resource: "*"
+            - Sid: SecretsAccess
+              Effect: Allow
+              Action:
+                - events:RetrieveConnectionCredentials
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource:
+                - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:connection/*
+                - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:events!connection/*
+
+Outputs:
+  StepFunctionArn:
+    Description: ARN of the Step Function
+    Value: !Ref getZipVendorsStepFunction
+  StepFunctionRole:
+    Description: IAM Role ARN automatically created for the state machine
+    Value: !GetAtt getZipVendorsStepFunctionRole.Arn
